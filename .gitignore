@@ -1,0 +1,83 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- Entornos Virtuales y Dependencias ---
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# --- Editores y Entornos de Desarrollo ---
+# VS Code
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# Neovim / Vim / Emacs
+.netrwhist
+*~
+*.swp
+*.swo
+.Session.vim
+
+# JetBrains IDEs (PyCharm)
+.idea/
+
+# --- Sistemas Operativos ---
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Logs, Bases de Datos y Salidas de Optimización ---
+# Archivos de registro de solvers (Gurobi, CPLEX)
+*.log
+*.ilp
+*.mps
+*.lp
+*.sav
+
+# Resultados y salidas experimentales locales
+outputs/logs/*
+outputs/results/*
+outputs/figures/*
+!outputs/logs/.gitkeep
+!outputs/results/.gitkeep
+!outputs/figures/.gitkeep
+
+# --- Datos y Caché Local ---
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
