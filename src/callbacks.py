@@ -14,8 +14,15 @@ from __future__ import annotations
 
 from typing import Any, List, Set, Tuple
 import networkx as nx
-import gurobipy as gp
-from gurobipy import GRB
+
+try:
+    import gurobipy as gp
+    from gurobipy import GRB
+    _HAS_GUROBI = True
+except ImportError:
+    gp = None
+    GRB = None
+    _HAS_GUROBI = False
 
 
 def find_minimal_separator(
@@ -65,7 +72,7 @@ def find_minimal_separator(
     return s_min
 
 
-def bcp_connectivity_callback(model: gp.Model, where: int) -> None:
+def bcp_connectivity_callback(model: Any, where: int) -> None:
     """
     Callback de Gurobi (MIPSOL) para agregar Lazy Constraints de conectividad (R4).
 
@@ -78,6 +85,12 @@ def bcp_connectivity_callback(model: gp.Model, where: int) -> None:
         model: Instancia del modelo Gurobi en optimización.
         where: Código de fase de Gurobi (GRB.Callback.*).
     """
+    if not _HAS_GUROBI:
+        raise ImportError(
+            "gurobipy no está disponible en este entorno. "
+            "Se requiere gurobipy para ejecutar bcp_connectivity_callback."
+        )
+
     if where != GRB.Callback.MIPSOL:
         return
 

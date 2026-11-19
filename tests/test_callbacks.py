@@ -8,6 +8,7 @@ Verifica:
 """
 
 import networkx as nx
+import pytest
 
 from src.callbacks import find_minimal_separator
 from src.model_gurobi import solve_bcp_gurobi
@@ -60,3 +61,26 @@ def test_solve_grid_graph_triggers_lazy_cuts():
 
     sizes = sorted(res["balance_stats"]["sizes"].values())
     assert sizes == [3, 3, 3]
+
+
+def test_callbacks_solver_independence(monkeypatch):
+    """
+    Verifica que find_minimal_separator sea independiente de gurobipy y que
+    bcp_connectivity_callback lance un mensaje informativo si gurobipy no está disponible.
+    """
+    import importlib
+    import src.callbacks as cb
+
+    # Simular un entorno donde gurobipy no está instalado
+    monkeypatch.setattr(cb, "_HAS_GUROBI", False)
+    monkeypatch.setattr(cb, "gp", None)
+    monkeypatch.setattr(cb, "GRB", None)
+
+    # find_minimal_separator debe seguir funcionando con normalidad
+    g = nx.path_graph([1, 2, 3])
+    min_sep = cb.find_minimal_separator(g, u=1, v=3, candidate_separator={2})
+    assert min_sep == {2}
+
+    # bcp_connectivity_callback debe avisar explícitamente sobre la falta de gurobipy
+    with pytest.raises(ImportError, match="gurobipy no está disponible"):
+        cb.bcp_connectivity_callback(model=None, where=0)
