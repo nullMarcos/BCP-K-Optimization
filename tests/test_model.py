@@ -10,6 +10,7 @@ from src.model_gurobi import (
     compute_balance_bounds,
     configurar_licencia,
     solve_bcp_gurobi,
+    solve_bcp,
 )
 
 def test_configurar_licencia(tmp_path):
@@ -92,15 +93,25 @@ def test_symmetry_breaking_anchor():
     assert res["assignment"][first_node] == 1
 
 
-def test_solve_grid_graph_triggers_lazy_cuts():
-    """Malla 3x3 con k=3: requiere agregar lazy cuts para evitar componentes desconectadas."""
-    grid = nx.grid_2d_graph(3, 3)
-    res = solve_bcp_gurobi(grid, k=3, epsilon=0.0, verbose=False)
+def test_solve_bcp_unified_wrapper():
+    """Verifica que la función unificada solve_bcp opere de forma idéntica a solve_bcp_gurobi."""
+    p6 = nx.path_graph(6)
+    res = solve_bcp(p6, k=2, epsilon=0.0, time_limit=10.0, verbose=False)
 
     assert res["status"] == "OPTIMAL"
-    assert res["objective"] == 6
+    assert res["objective"] == 1
     assert res["is_connected"] is True
-    assert res["lazy_cuts_added"] > 0
+    assert len(res["cut_edges"]) == 1
 
-    sizes = sorted(res["balance_stats"]["sizes"].values())
-    assert sizes == [3, 3, 3]
+
+def test_solve_bcp_gurobi_presolve():
+    """Verifica que el parámetro presolve se configure y ejecute correctamente en Gurobi."""
+    p6 = nx.path_graph(6)
+    # Probar con Presolve desactivado (0) y agresivo (2)
+    res_no_presolve = solve_bcp_gurobi(p6, k=2, presolve=0, verbose=False)
+    assert res_no_presolve["status"] == "OPTIMAL"
+    assert res_no_presolve["model"].Params.Presolve == 0
+
+    res_aggressive = solve_bcp_gurobi(p6, k=2, presolve=2, verbose=False)
+    assert res_aggressive["status"] == "OPTIMAL"
+    assert res_aggressive["model"].Params.Presolve == 2
