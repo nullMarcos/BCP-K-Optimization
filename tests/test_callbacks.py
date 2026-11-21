@@ -7,6 +7,8 @@ Verifica:
       componentes desconectadas potenciales (ej. malla 2D).
 """
 
+import itertools
+import math
 import random
 
 import networkx as nx
@@ -19,6 +21,12 @@ try:
     HAY_GUROBI = True
 except ImportError:
     HAY_GUROBI = False
+
+try:
+    from src.model_cplex import solve_bcp_cplex
+    HAY_CPLEX = True
+except ImportError:
+    HAY_CPLEX = False
 
 requiere_gurobi = pytest.mark.skipif(not HAY_GUROBI, reason="gurobipy no instalado")
 
@@ -189,3 +197,94 @@ def test_callbacks_solver_independence(monkeypatch):
     # bcp_connectivity_callback debe avisar explícitamente sobre la falta de gurobipy
     with pytest.raises(ImportError, match="gurobipy no está disponible"):
         cb.bcp_connectivity_callback(model=None, where=0)
+
+
+# ---------------------------------------------------------------------------
+# Pruebas de estrés: grafos con puntos de articulación (cuellos de botella)
+# ---------------------------------------------------------------------------
+
+def _cadena_de_triangulos():
+    # triángulos (0,1,2), (2,3,4), (4,5,6): los nodos 2 y 4 son de articulación
+    g = nx.Graph()
+    g.add_edges_from([(0, 1), (1, 2), (0, 2), (2, 3), (3, 4), (2, 4), (4, 5), (5, 6), (4, 6)])
+    return g
+
+
+def _peine():
+    # columna 0-1-2-3 con un diente colgando de cada nodo
+    g = nx.path_graph(4)
+    g.add_edges_from((i, i + 4) for i in range(4))
+    return g
+
+
+def _dos_estrellas():
+    g = nx.star_graph(3)
+    g.add_edges_from([(0, 10), (10, 11), (10, 12), (10, 13)])
+    return g
+
+
+GRAFOS_ARTICULACION = {
+    "barbell_camino": lambda: nx.barbell_graph(3, 3),
+    "lollipop": lambda: nx.lollipop_graph(4, 4),
+    "cadena_triangulos": _cadena_de_triangulos,
+    "peine": _peine,
+    "arbol_binario": lambda: nx.balanced_tree(2, 2),
+    "dos_estrellas": _dos_estrellas,
+}
+
+SOLVERS = {
+    "gurobi": solve_bcp_gurobi if HAY_GUROBI else None,
+    "cplex": solve_bcp_cplex if HAY_CPLEX else None,
+}
+
+
+def _optimo_fuerza_bruta(g, k, epsilon):
+    """Óptimo exacto enumerando todas las asignaciones (solo sirve en grafos chicos).
+
+    Devuelve None si no existe partición balanceada y conexa.
+    """
+    nodos = list(g.nodes())
+    n = len(nodos)
+    l_min = max(1, math.floor((1 - epsilon) * n / k + 1e-9))
+    u_max = math.ceil((1 + epsilon) * n / k - 1e-9)
+
+    mejor = None
+    # el primer nodo se fija en el grupo 0 para no repetir permutaciones
+    for resto in itertools.product(range(k), repeat=n - 1):
+        grupo = dict(zip(nodos, (0,) + resto))
+        bloques = [[v for v in nodos if grupo[v] == p] for p in range(k)]
+        if any(not (l_min <= len(b) <= u_max) for b in bloques):
+            continue
+        if any(not nx.is_connected(g.subgraph(b)) for b in bloques):
+            continue
+        cortadas = sum(1 for u, v in g.edges() if grupo[u] != grupo[v])
+        if mejor is None or cortadas < mejor:
+            mejor = cortadas
+    return mejor
+
+
+@pytest.mark.parametrize("solver", SOLVERS)
+@pytest.mark.parametrize("nombre", GRAFOS_ARTICULACION)
+@pytest.mark.parametrize(("k", "epsilon"), [(2, 0.0), (3, 0.0), (3, 0.2)])
+def test_estres_articulacion(solver, nombre, k, epsilon):
+    """Ninguna solución final puede tener particiones desconectadas."""
+    if SOLVERS[solver] is None:
+        pytest.skip(f"{solver} no instalado")
+
+    g = GRAFOS_ARTICULACION[nombre]()
+    esperado = _optimo_fuerza_bruta(g, k, epsilon)
+    res = SOLVERS[solver](g, k=k, epsilon=epsilon, verbose=False, time_limit=60)
+
+    if esperado is None:
+        assert not res["has_solution"]
+        assert res["status"] in ("INFEASIBLE", "INF_OR_UNBD")
+        return
+
+    assert res["status"] == "OPTIMAL"
+    assert res["objective"] == esperado
+    assert res["is_connected"] is True
+    for bloque in res["partitions"].values():
+        assert nx.is_connected(g.subgraph(bloque))
+
+    sizes = res["balance_stats"]["sizes"].values()
+    assert all(res["balance_stats"]["l_min"] <= s <= res["balance_stats"]["u_max"] for s in sizes)
