@@ -5,7 +5,8 @@ Asignado a: Sebastián
 Responsabilidades:
     - Lógica de separación de cortes de conectividad (R4).
     - Métodos BFS/DFS para identificación de componentes conexas inducidas.
-    - Determinación y poda de separadores nodales mínimos (find_minimal_separator).
+    - Poda de separadores nodales a separadores minimales (find_minimal_separator).
+    - Separador común para ambos solvers (find_connectivity_cuts).
     - Callbacks de Lazy Constraints para Gurobi (bcp_connectivity_callback)
       y soporte reusable para el callback equivalente en CPLEX (model_cplex.py).
 """
@@ -33,7 +34,7 @@ def find_minimal_separator(
     candidate_separator: Set[Any],
 ) -> Set[Any]:
     """
-    Poda un separador nodal candidato a un separador nodal mínimo S <= candidate_separator
+    Poda un separador nodal candidato a uno minimal S <= candidate_separator
     que desconecta el par de nodos (u, v) en graph.
 
     Esta rutina es independiente del solver y puede ser reutilizada tanto por
@@ -83,8 +84,13 @@ def find_connectivity_cuts(
     Para cada partición p se revisa si G[V_p] es conexo. Si no lo es, se agrega
     un corte por cada componente C (incluida la más grande), separando un nodo
     u de C de un nodo v de V_p fuera de C, con la vecindad N(C) podada con
-    find_minimal_separator. Probé cortar solo las componentes chicas y el árbol
-    B&B salía más grande, por eso se cortan todas.
+    find_minimal_separator (queda minimal por inclusión, no necesariamente de
+    cardinalidad mínima). Se cortan todas las componentes para mantener el mismo
+    comportamiento que tenía el callback original de Gurobi; cortar solo las
+    chicas dio resultados mixtos según la instancia.
+
+    Ojo: con dos componentes puede salir el mismo corte dos veces, como (u, v, S)
+    y (v, u, S). Por eso lazy_cuts_added cuenta también esos repetidos.
 
     No usa nada del solver, por lo que sirve tanto para Gurobi como para CPLEX
     (model_cplex.py la carga sola mediante _load_external_separator).
