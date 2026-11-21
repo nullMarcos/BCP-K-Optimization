@@ -12,7 +12,7 @@ Responsabilidades:
 
 from __future__ import annotations
 
-from typing import Any, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 import networkx as nx
 
 try:
@@ -70,6 +70,56 @@ def find_minimal_separator(
             s_min.remove(s)
 
     return s_min
+
+
+def find_connectivity_cuts(
+    internal_graph: nx.Graph,
+    partitions_nodes: Dict[int, List[int]],
+) -> List[Tuple[int, int, int, Set[int]]]:
+    """
+    Busca los cortes de conectividad (R4) violados por una asignación de nodos.
+
+    Para cada partición p se revisa si G[V_p] es conexo. Si no lo es, se agrega
+    un corte por cada componente C (incluida la más grande), separando un nodo
+    u de C de un nodo v de V_p fuera de C, con la vecindad N(C) podada con
+    find_minimal_separator. Probé cortar solo las componentes chicas y el árbol
+    B&B salía más grande, por eso se cortan todas.
+
+    No usa nada del solver, por lo que sirve tanto para Gurobi como para CPLEX
+    (model_cplex.py la carga sola mediante _load_external_separator).
+
+    Args:
+        internal_graph: Grafo con los nodos indexados 1..n.
+        partitions_nodes: Diccionario {p: [nodos asignados a p]}.
+
+    Returns:
+        Lista de tuplas (p, u, v, S), cada una representa el corte
+        x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}.
+    """
+    cortes: List[Tuple[int, int, int, Set[int]]] = []
+
+    for p, v_p in partitions_nodes.items():
+        if len(v_p) <= 1:
+            continue
+
+        componentes = list(nx.connected_components(internal_graph.subgraph(v_p)))
+        if len(componentes) <= 1:
+            continue
+
+        componentes.sort(key=len)
+
+        for comp in componentes:
+            u_rep = next(iter(comp))
+            v_rep = next(w for w in v_p if w not in comp)
+            # N(C): ninguno de estos nodos está en V_p, si no C no sería componente
+            vecindad = {
+                w for nodo in comp for w in internal_graph.neighbors(nodo)
+                if w not in comp
+            }
+            separador = find_minimal_separator(internal_graph, u_rep, v_rep, vecindad)
+            cortes.append((p, u_rep, v_rep, separador))
+
+    return cortes
 
 
 def bcp_connectivity_callback(model: Any, where: int) -> None:
