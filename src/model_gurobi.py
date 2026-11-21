@@ -267,6 +267,7 @@ def solve_bcp_gurobi(
             - runtime: Tiempo total de resolución en segundos.
             - node_count: Número de nodos explorados en el árbol Branch-and-Cut.
             - lazy_cuts_added: Cantidad de restricciones de conectividad agregadas dinámicamente.
+            - callback_time: Segundos usados en separar cortes dentro del callback (MIPSOL).
             - partitions: Mapeo {p: [nodos]} con etiquetas originales del grafo.
             - assignment: Mapeo {nodo: p} para cada nodo del grafo.
             - cut_edges: Lista de tuplas (u, v) correspondientes a las aristas cortadas.

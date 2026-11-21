@@ -161,7 +161,8 @@ class BCPConnectivityLazyCallback(ConstraintCallbackMixin, LazyConstraintCallbac
         try:
             self._separar()
         finally:
-            self.bcp_data["callback_time"] += time.perf_counter() - inicio
+            transcurrido = time.perf_counter() - inicio
+            self.bcp_data["callback_time"] = self.bcp_data.get("callback_time", 0.0) + transcurrido
 
     def _separar(self) -> None:
         data = self.bcp_data
@@ -447,6 +448,7 @@ def solve_bcp_cplex(
             - wall_time: Tiempo de pared medido externamente en segundos.
             - node_count: Número de nodos procesados en el árbol Branch-and-Cut.
             - lazy_cuts_added: Cantidad de restricciones perezosas R4 inyectadas.
+            - callback_time: Segundos usados dentro del callback de conectividad.
             - partitions: Mapeo {p: [nodos]} con etiquetas originales del grafo.
             - assignment: Mapeo {nodo: p} para cada nodo del grafo.
             - cut_edges: Lista de tuplas (u, v) de aristas cortadas.
