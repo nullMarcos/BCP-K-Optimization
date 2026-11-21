@@ -218,6 +218,7 @@ def build_bcp_gurobi_model(
         "use_symmetry_breaking": use_symmetry_breaking,
         "use_lazy_connectivity": use_lazy_connectivity,
         "lazy_cuts_count": 0,
+        "callback_time": 0.0,
     }
 
     model._bcp_data = metadata
@@ -391,6 +392,7 @@ def solve_bcp_gurobi(
         "wall_time": end_wall_time - start_wall_time,
         "node_count": int(model.NodeCount) if hasattr(model, "NodeCount") else 0,
         "lazy_cuts_added": meta["lazy_cuts_count"],
+        "callback_time": meta["callback_time"],
         "partitions": partitions_dict,
         "assignment": assignment_dict,
         "cut_edges": cut_edges_list,

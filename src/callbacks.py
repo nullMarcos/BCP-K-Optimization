@@ -12,6 +12,7 @@ Responsabilidades:
 
 from __future__ import annotations
 
+import time
 from typing import Any, Dict, List, Set, Tuple
 import networkx as nx
 
@@ -150,6 +151,8 @@ def bcp_connectivity_callback(model: Any, where: int) -> None:
     x = data["x"]
     internal_nodes: List[int] = data["internal_nodes"]
 
+    inicio = time.perf_counter()
+
     # Valores de la solución entera candidata
     x_sol = model.cbGetSolution(x)
 
@@ -165,3 +168,6 @@ def bcp_connectivity_callback(model: Any, where: int) -> None:
             <= gp.quicksum(x[s, p] for s in separador)
         )
         data["lazy_cuts_count"] += 1
+
+    # tiempo acumulado dentro del callback, para las estadísticas del informe
+    data["callback_time"] = data.get("callback_time", 0.0) + time.perf_counter() - inicio
