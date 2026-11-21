@@ -7,11 +7,41 @@ Verifica:
       componentes desconectadas potenciales (ej. malla 2D).
 """
 
+import random
+
 import networkx as nx
 import pytest
 
-from src.callbacks import find_minimal_separator
-from src.model_gurobi import solve_bcp_gurobi
+from src.callbacks import find_connectivity_cuts, find_minimal_separator
+
+try:
+    from src.model_gurobi import solve_bcp_gurobi
+    HAY_GUROBI = True
+except ImportError:
+    HAY_GUROBI = False
+
+requiere_gurobi = pytest.mark.skipif(not HAY_GUROBI, reason="gurobipy no instalado")
+
+
+def _revisar_corte(g, partitions_nodes, corte):
+    """Comprueba que un corte (p, u, v, S) sea válido, esté violado y S sea minimal."""
+    p, u, v, sep = corte
+    v_p = set(partitions_nodes[p])
+
+    assert u in v_p and v in v_p
+    # el corte está violado: lado izquierdo = 1 y ningún nodo de S está en V_p
+    assert not (sep & v_p)
+
+    # S separa a u de v
+    g_sin_s = g.copy()
+    g_sin_s.remove_nodes_from(sep)
+    assert not nx.has_path(g_sin_s, u, v)
+
+    # minimalidad: si se saca cualquier nodo de S, u y v vuelven a conectarse
+    for s in sep:
+        g_aux = g.copy()
+        g_aux.remove_nodes_from(sep - {s})
+        assert nx.has_path(g_aux, u, v)
 
 
 def test_find_minimal_separator_pruning():
@@ -46,6 +76,81 @@ def test_find_minimal_separator_already_minimal():
     assert min_sep == {0}
 
 
+def test_cuts_particion_conexa_no_genera_cortes():
+    g = nx.path_graph(range(1, 7))
+    particiones = {1: [1, 2, 3], 2: [4, 5, 6]}
+    assert find_connectivity_cuts(g, particiones) == []
+
+
+def test_cuts_particion_desconectada():
+    # Camino 1-2-3-4-5-6: la partición 1 queda partida en {1,2} y {5,6}
+    g = nx.path_graph(range(1, 7))
+    particiones = {1: [1, 2, 5, 6], 2: [3, 4]}
+
+    cortes = find_connectivity_cuts(g, particiones)
+
+    # un corte por componente, y solo para la partición 1
+    assert len(cortes) == 2
+    assert all(c[0] == 1 for c in cortes)
+    for corte in cortes:
+        _revisar_corte(g, particiones, corte)
+
+
+def test_cuts_varias_componentes():
+    # Estrella con centro 0: si el centro queda fuera, cada hoja es una componente
+    g = nx.star_graph(4)
+    particiones = {1: [1, 2, 3], 2: [0, 4]}
+
+    cortes = find_connectivity_cuts(g, particiones)
+
+    assert len(cortes) == 3
+    for corte in cortes:
+        _revisar_corte(g, particiones, corte)
+        assert corte[3] == {0}
+
+
+def test_cuts_separador_es_punto_de_articulacion():
+    # Dos K4 unidos por un camino de 2 nodos; tomar ambos cliques sin el camino
+    g = nx.barbell_graph(4, 2)
+    cliques = [0, 1, 2, 3, 6, 7, 8, 9]
+    particiones = {1: cliques, 2: [4, 5]}
+
+    cortes = find_connectivity_cuts(g, particiones)
+
+    assert len(cortes) == 2
+    for corte in cortes:
+        _revisar_corte(g, particiones, corte)
+        # basta con uno de los nodos del camino
+        assert len(corte[3]) == 1 and corte[3] <= {4, 5}
+
+
+@pytest.mark.parametrize("semilla", range(20))
+def test_cuts_asignaciones_aleatorias(semilla):
+    """Todos los cortes generados deben ser válidos en asignaciones al azar."""
+    rng = random.Random(semilla)
+    n = rng.randint(8, 20)
+    g = nx.connected_watts_strogatz_graph(n, 4, 0.3, seed=semilla)
+    g = nx.relabel_nodes(g, {i: i + 1 for i in g.nodes()})
+    k = rng.randint(2, 4)
+
+    particiones = {p: [] for p in range(1, k + 1)}
+    for i in g.nodes():
+        particiones[rng.randint(1, k)].append(i)
+
+    cortes = find_connectivity_cuts(g, particiones)
+
+    for corte in cortes:
+        _revisar_corte(g, particiones, corte)
+
+    # debe haber cortes justo en las particiones que no son conexas
+    desconectadas = {
+        p for p, nodos in particiones.items()
+        if len(nodos) > 1 and not nx.is_connected(g.subgraph(nodos))
+    }
+    assert {c[0] for c in cortes} == desconectadas
+
+
+@requiere_gurobi
 def test_solve_grid_graph_triggers_lazy_cuts():
     """
     Malla 3x3 con k=3: Requiere agregar lazy cuts para evitar componentes desconectadas.
