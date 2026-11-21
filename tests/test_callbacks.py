@@ -3,8 +3,12 @@ Pruebas unitarias para separadores nodales y callbacks de conectividad (src/call
 
 Verifica:
     - find_minimal_separator: Poda exacta de separadores candidatos a minimales.
+    - find_connectivity_cuts: cortes válidos, violados y con separador minimal,
+      probados sin necesidad de ningún solver.
     - bcp_connectivity_callback: Generación y efectividad de lazy cuts en grafos con
       componentes desconectadas potenciales (ej. malla 2D).
+    - Pruebas de estrés con puntos de articulación en Gurobi y CPLEX, comparando
+      contra fuerza bruta. Se saltan si el solver no está instalado.
 """
 
 import itertools
@@ -130,6 +134,22 @@ def test_cuts_separador_es_punto_de_articulacion():
         _revisar_corte(g, particiones, corte)
         # basta con uno de los nodos del camino
         assert len(corte[3]) == 1 and corte[3] <= {4, 5}
+
+
+def test_cuts_poda_la_vecindad():
+    # 1-2-3 más una hoja 4 colgando de 1. Con V_1 = {1, 3}, la vecindad de {1}
+    # es {2, 4}, pero el 4 no hace falta para separar 1 de 3.
+    g = nx.Graph([(1, 2), (2, 3), (1, 4)])
+    particiones = {1: [1, 3], 2: [2, 4]}
+
+    cortes = find_connectivity_cuts(g, particiones)
+    for corte in cortes:
+        _revisar_corte(g, particiones, corte)
+
+    # la partición 2 = {2, 4} también queda partida, acá solo interesa la 1
+    cortes_p1 = [c for c in cortes if c[0] == 1]
+    assert cortes_p1
+    assert all(c[3] == {2} for c in cortes_p1)
 
 
 @pytest.mark.parametrize("semilla", range(20))
@@ -278,6 +298,9 @@ def test_estres_articulacion(solver, nombre, k, epsilon):
     if esperado is None:
         assert not res["has_solution"]
         assert res["status"] in ("INFEASIBLE", "INF_OR_UNBD")
+        # el balance solo siempre es factible, así que la infactibilidad
+        # tiene que venir de los cortes de conectividad
+        assert res["lazy_cuts_added"] > 0
         return
 
     assert res["status"] == "OPTIMAL"
@@ -288,3 +311,26 @@ def test_estres_articulacion(solver, nombre, k, epsilon):
 
     sizes = res["balance_stats"]["sizes"].values()
     assert all(res["balance_stats"]["l_min"] <= s <= res["balance_stats"]["u_max"] for s in sizes)
+
+
+@pytest.mark.parametrize("solver", SOLVERS)
+def test_conectividad_cambia_el_optimo(solver):
+    """Caso donde R4 sí importa: sin los cortes, el óptimo deja un bloque suelto."""
+    if SOLVERS[solver] is None:
+        pytest.skip(f"{solver} no instalado")
+
+    # K4 con dos hojas (4 y 5) colgando del nodo 0
+    g = nx.complete_graph(4)
+    g.add_edges_from([(0, 4), (0, 5)])
+
+    sin_r4 = SOLVERS[solver](g, k=2, epsilon=0.2, verbose=False, use_lazy_connectivity=False)
+    con_r4 = SOLVERS[solver](g, k=2, epsilon=0.2, verbose=False)
+
+    # sin conectividad conviene separar {4, 5}, que no es conexo
+    assert sin_r4["objective"] == 2
+    assert sin_r4["is_connected"] is False
+
+    assert con_r4["status"] == "OPTIMAL"
+    assert con_r4["objective"] == 3 == _optimo_fuerza_bruta(g, 2, 0.2)
+    assert con_r4["is_connected"] is True
+    assert con_r4["lazy_cuts_added"] > 0
