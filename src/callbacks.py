@@ -150,51 +150,18 @@ def bcp_connectivity_callback(model: Any, where: int) -> None:
     x = data["x"]
     internal_nodes: List[int] = data["internal_nodes"]
 
-    # Obtener valores de la solución entera actual
+    # Valores de la solución entera candidata
     x_sol = model.cbGetSolution(x)
 
-    # Analizar la conexidad de cada partición p
-    for p in range(1, k + 1):
-        v_p = [i for i in internal_nodes if x_sol[i, p] > 0.5]
-        if len(v_p) <= 1:
-            continue
+    partitions_nodes = {
+        p: [i for i in internal_nodes if x_sol[i, p] > 0.5]
+        for p in range(1, k + 1)
+    }
 
-        sub_g = internal_graph.subgraph(v_p)
-        components = list(nx.connected_components(sub_g))
-
-        if len(components) <= 1:
-            continue
-
-        # La partición p está desconectada en len(components) componentes
-        # Ordenamos las componentes por tamaño ascendente
-        components.sort(key=len)
-
-        # Para cada componente aislada c_comp
-        for c_comp in components:
-            # Vecindad abierta en internal_graph de c_comp hacia el exterior
-            n_c = set()
-            for u in c_comp:
-                for nbr in internal_graph.neighbors(u):
-                    if nbr not in c_comp:
-                        n_c.add(nbr)
-
-            # En la solución actual, ningún nodo de n_c pertenece a v_p
-            # Tomamos un representante u de c_comp y un representante v fuera de c_comp
-            other_nodes = [w for w in v_p if w not in c_comp]
-            if not other_nodes:
-                continue
-
-            u_rep = next(iter(c_comp))
-            v_rep = other_nodes[0]
-
-            # Obtenemos un separador nodal mínimo S <= n_c que desconecta u_rep y v_rep
-            s_separator = find_minimal_separator(internal_graph, u_rep, v_rep, n_c)
-            if not s_separator:
-                s_separator = n_c
-
-            # Restricción perezosa R4: x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}
-            model.cbLazy(
-                x[u_rep, p] + x[v_rep, p] - 1
-                <= gp.quicksum(x[s, p] for s in s_separator)
-            )
-            data["lazy_cuts_count"] += 1
+    for p, u_rep, v_rep, separador in find_connectivity_cuts(internal_graph, partitions_nodes):
+        # R4: x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}
+        model.cbLazy(
+            x[u_rep, p] + x[v_rep, p] - 1
+            <= gp.quicksum(x[s, p] for s in separador)
+        )
+        data["lazy_cuts_count"] += 1
