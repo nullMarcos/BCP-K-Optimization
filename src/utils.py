@@ -1,53 +1,44 @@
-"""
-Módulo de utilidades generales, preprocesamiento y métricas topológicas para BCP_k.
-
-Contenido principal:
-    - Preprocesamiento y validación de grafos.
-    - Extracción de métricas topológicas (densidad, grado promedio, transitividad, etc.).
-    - Utilidades para manejo de datos de instancias.
-
-Nota de integración:
-    - La gestión de licencias se encuentra modularizada en `src.license` y se
-      re-exporta aquí para mantener compatibilidad hacia atrás.
-"""
+"""Utilidades de preprocesamiento y métricas topológicas para BCP_k."""
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 import networkx as nx
 
-# Re-exportación de configuración de licencias (modularizado en src.license)
 from src.license import configurar_licencia
 
-__all__ = [
-    "configurar_licencia",
-]
+__all__ = ["configurar_licencia", "preprocess_graph", "compute_graph_metrics"]
 
-# ============================================================================
-# Sección reservada para Francisco: Métricas Topológicas y Preprocesamiento
-# ============================================================================
+
+def preprocess_graph(graph: nx.Graph) -> nx.Graph:
+    """Extrae la componente conexa principal, limpia auto-lazos y re-indexa nodos a 1...n."""
+    ug = nx.Graph(graph.to_undirected() if graph.is_directed() else graph)
+    ug.remove_edges_from(nx.selfloop_edges(ug))
+
+    if ug.number_of_nodes() < 2:
+        raise ValueError("El grafo debe contener al menos 2 nodos.")
+
+    if not nx.is_connected(ug):
+        largest_cc = max(nx.connected_components(ug), key=len)
+        ug = ug.subgraph(largest_cc).copy()
+
+    clean = nx.convert_node_labels_to_integers(ug, first_label=1, ordering="sorted")
+    clean.graph.update(graph.graph)
+    return clean
+
 
 def compute_graph_metrics(graph: nx.Graph) -> Dict[str, Any]:
-    """
-    Calcula métricas topológicas clave para una instancia de grafo.
-
-    Args:
-        graph: Grafo de NetworkX.
-
-    Returns:
-        Dict con métricas como número de nodos, número de aristas, densidad,
-        grado promedio, conectividad algebraica, etc.
-    """
+    """Calcula nodos (n), aristas (m), grado medio, densidad y diámetro."""
     n = graph.number_of_nodes()
     m = graph.number_of_edges()
-    density = nx.density(graph) if n > 1 else 0.0
-    avg_degree = (2.0 * m) / n if n > 0 else 0.0
+    connected = nx.is_connected(graph) if n > 0 else False
+    target = graph if connected else graph.subgraph(max(nx.connected_components(graph), key=len))
 
     return {
         "num_nodes": n,
         "num_edges": m,
-        "density": density,
-        "avg_degree": avg_degree,
-        "is_connected": nx.is_connected(graph) if n > 0 else False,
+        "avg_degree": round((2.0 * m) / n, 4) if n > 0 else 0.0,
+        "density": round(float(nx.density(graph)), 4) if n > 1 else 0.0,
+        "diameter": int(nx.diameter(target)) if target.number_of_nodes() > 1 else 0,
+        "is_connected": connected,
     }
