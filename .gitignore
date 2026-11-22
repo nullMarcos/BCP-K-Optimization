@@ -66,6 +66,7 @@ Desktop.ini
 *.sav
 
 # Resultados y salidas experimentales locales
+outputs/20*/
 outputs/logs/*
 outputs/results/*
 outputs/figures/*
@@ -74,10 +75,6 @@ outputs/figures/*
 !outputs/figures/.gitkeep
 
 # --- Datos y Caché Local ---
-data/raw/*
-data/processed/*
-!data/raw/.gitkeep
-!data/processed/.gitkeep
 .ipynb_checkpoints/
 .pytest_cache/
 .mypy_cache/
