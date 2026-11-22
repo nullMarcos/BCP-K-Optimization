@@ -218,6 +218,7 @@ def build_bcp_gurobi_model(
         "use_symmetry_breaking": use_symmetry_breaking,
         "use_lazy_connectivity": use_lazy_connectivity,
         "lazy_cuts_count": 0,
+        "callback_time": 0.0,
     }
 
     model._bcp_data = metadata
@@ -266,6 +267,7 @@ def solve_bcp_gurobi(
             - runtime: Tiempo total de resolución en segundos.
             - node_count: Número de nodos explorados en el árbol Branch-and-Cut.
             - lazy_cuts_added: Cantidad de restricciones de conectividad agregadas dinámicamente.
+            - callback_time: Segundos usados en separar cortes dentro del callback (MIPSOL).
             - partitions: Mapeo {p: [nodos]} con etiquetas originales del grafo.
             - assignment: Mapeo {nodo: p} para cada nodo del grafo.
             - cut_edges: Lista de tuplas (u, v) correspondientes a las aristas cortadas.
@@ -391,6 +393,7 @@ def solve_bcp_gurobi(
         "wall_time": end_wall_time - start_wall_time,
         "node_count": int(model.NodeCount) if hasattr(model, "NodeCount") else 0,
         "lazy_cuts_added": meta["lazy_cuts_count"],
+        "callback_time": meta["callback_time"],
         "partitions": partitions_dict,
         "assignment": assignment_dict,
         "cut_edges": cut_edges_list,

@@ -13,6 +13,7 @@ from typing import Any
 __all__ = [
     "configurar_licencia",
     "find_minimal_separator",
+    "find_connectivity_cuts",
     "bcp_connectivity_callback",
     "compute_balance_bounds",
     "build_bcp_gurobi_model",
@@ -22,7 +23,7 @@ __all__ = [
 
 
 def __getattr__(name: str) -> Any:
-    if name in ("find_minimal_separator", "bcp_connectivity_callback"):
+    if name in ("find_minimal_separator", "find_connectivity_cuts", "bcp_connectivity_callback"):
         import src.callbacks as _callbacks
         return getattr(_callbacks, name)
     if name in (

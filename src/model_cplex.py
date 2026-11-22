@@ -157,6 +157,14 @@ class BCPConnectivityLazyCallback(ConstraintCallbackMixin, LazyConstraintCallbac
         self.separator_fn: SeparatorFn = _default_connectivity_separator
 
     def __call__(self) -> None:
+        inicio = time.perf_counter()
+        try:
+            self._separar()
+        finally:
+            transcurrido = time.perf_counter() - inicio
+            self.bcp_data["callback_time"] = self.bcp_data.get("callback_time", 0.0) + transcurrido
+
+    def _separar(self) -> None:
         data = self.bcp_data
         internal_graph: nx.Graph = data["internal_graph"]
         internal_nodes: List[int] = data["internal_nodes"]
@@ -346,6 +354,7 @@ def build_bcp_cplex_model(
         "use_symmetry_breaking": use_symmetry_breaking,
         "use_lazy_connectivity": use_lazy_connectivity,
         "lazy_cuts_count": 0,
+        "callback_time": 0.0,
     }
 
     return model, metadata
@@ -439,6 +448,7 @@ def solve_bcp_cplex(
             - wall_time: Tiempo de pared medido externamente en segundos.
             - node_count: Número de nodos procesados en el árbol Branch-and-Cut.
             - lazy_cuts_added: Cantidad de restricciones perezosas R4 inyectadas.
+            - callback_time: Segundos usados dentro del callback de conectividad.
             - partitions: Mapeo {p: [nodos]} con etiquetas originales del grafo.
             - assignment: Mapeo {nodo: p} para cada nodo del grafo.
             - cut_edges: Lista de tuplas (u, v) de aristas cortadas.
@@ -590,6 +600,7 @@ def solve_bcp_cplex(
         "wall_time": end_wall_time - start_wall_time,
         "node_count": node_count,
         "lazy_cuts_added": meta["lazy_cuts_count"],
+        "callback_time": meta["callback_time"],
         "partitions": partitions_dict,
         "assignment": assignment_dict,
         "cut_edges": cut_edges_list,
