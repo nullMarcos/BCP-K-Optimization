@@ -1,4 +1,4 @@
-gurobipy>=13.0.0,<14.0.0
+gurobipy>=11.0.0
 docplex>=2.27.0
 networkx>=3.2.0
 numpy>=1.26.0

@@ -22,13 +22,16 @@ share/python-wheels/
 *.egg
 MANIFEST
 
-# --- Entornos Virtuales y Dependencias ---
+# --- Entornos Virtuales, Variables de Entorno y Secretos ---
 .venv/
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+.env
+.env.*
+!.env.example
 
 # --- Editores y Entornos de Desarrollo ---
 # VS Code
