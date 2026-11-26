@@ -82,3 +82,5 @@ outputs/figures/*
 .pytest_cache/
 .mypy_cache/
 .agent-review/
+
+outputs.zip

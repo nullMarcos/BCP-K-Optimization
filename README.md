@@ -163,6 +163,15 @@ python scripts/visualize_partition.py --instance karate_club --k 2 --compare-eps
    ./scripts/test_server_connection.sh
    ```
 2. **Sincronización de resultados desde el servidor a tu máquina local:**
+   *(El servidor `chome` no cuenta con `rsync`, por lo que se recomienda transferir comprimido vía `ssh` + `tar` o con `scp`)*:
    ```bash
-   rsync -avzP grupo12@chome.inf.udec.cl:~/BCP-K-Optimization/outputs/ ./outputs/
+   # Traer figuras, resultados y logs comprimidos al vuelo
+   ssh grupo12@chome.inf.udec.cl "tar -czf - -C ~/BCP-K-Optimization outputs/figures outputs/results outputs/logs" | tar -xzf -
+
+   # Alternativa directa con scp (incluyendo opcionalmente una carpeta de ejecución específica)
+   scp -r \
+     grupo12@chome.inf.udec.cl:~/BCP-K-Optimization/outputs/figures \
+     grupo12@chome.inf.udec.cl:~/BCP-K-Optimization/outputs/results \
+     grupo12@chome.inf.udec.cl:~/BCP-K-Optimization/outputs/logs \
+     ./outputs/
    ```
