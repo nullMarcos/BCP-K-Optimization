@@ -176,6 +176,29 @@ def test_cplex_parameters_and_log_file(tmp_path: Path):
     assert log_path.stat().st_size > 0
 
 
+def test_cplex_multithread_generic_callback(tmp_path: Path):
+    """Verifica ejecución paralela multi-hilo con Generic Callback de conectividad."""
+    g = nx.karate_club_graph()
+    log_path = tmp_path / "cplex_mt.log"
+
+    res = solve_bcp_cplex(
+        graph=g,
+        k=2,
+        epsilon=0.05,
+        time_limit=30.0,
+        threads=4,
+        log_file=str(log_path),
+        verbose=False,
+    )
+
+    assert res["status"] == "OPTIMAL"
+    assert res["objective"] == 10
+    assert res["is_connected"] is True
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "Generic callback" in log_text
+    assert "using up to 4 threads" in log_text
+
+
 @pytest.mark.skipif(
     not _gurobi_available(),
     reason="Validación cruzada omitida: src/model_gurobi.py o gurobipy no disponibles en esta rama.",

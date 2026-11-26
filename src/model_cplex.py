@@ -17,19 +17,20 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+import threading
 import time
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import networkx as nx
-from docplex.mp.callbacks.cb_mixin import ConstraintCallbackMixin
 from docplex.mp.model import Model as DocplexModel
 
 try:
-    from cplex.callbacks import LazyConstraintCallback
+    from cplex import SparsePair
+    from cplex.callbacks import Context
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
         "El paquete 'cplex' es requerido junto con 'docplex' para ejecutar el "
-        "modelo BCP_k y registrar LazyConstraintCallback."
+        "modelo BCP_k y registrar el Generic Callback de conectividad."
     ) from exc
 
 
@@ -141,50 +142,64 @@ def _default_connectivity_separator(
     return cuts
 
 
-class BCPConnectivityLazyCallback(ConstraintCallbackMixin, LazyConstraintCallback):
+class BCPConnectivityGenericCallback:
     """
-    Callback de restricciones perezosas (LazyConstraintCallback) de CPLEX para R4.
+    Generic Callback de CPLEX (Context.id.candidate) para restricciones perezosas (R4).
 
-    En cada solución entera incumbente candidata, verifica la conexidad inducida de
-    cada subgrafo G[V_p] e inyecta las desigualdades de separador nodal violadas:
+    Compatible con búsqueda dinámica y ejecución paralela multi-hilo en CPLEX.
+    En cada solución entera candidata, verifica la conexidad inducida de cada
+    subgrafo G[V_p] y rechaza la candidata inyectando las desigualdades de separador
+    nodal violadas:
         x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}
     """
 
-    def __init__(self, env: Any) -> None:
-        LazyConstraintCallback.__init__(self, env)
-        ConstraintCallbackMixin.__init__(self)
-        self.bcp_data: Dict[str, Any] = {}
-        self.separator_fn: SeparatorFn = _default_connectivity_separator
+    def __init__(
+        self,
+        bcp_data: Dict[str, Any],
+        separator_fn: SeparatorFn = _default_connectivity_separator,
+    ) -> None:
+        self.bcp_data = bcp_data
+        self.separator_fn = separator_fn
+        self._lock = threading.Lock()
 
-    def __call__(self) -> None:
+    def invoke(self, context: Any) -> None:
+        if not context.in_candidate() or not context.is_candidate_point():
+            return
+
         inicio = time.perf_counter()
+        cuts_added = 0
         try:
-            self._separar()
+            cuts_added = self._separar(context)
         finally:
             transcurrido = time.perf_counter() - inicio
-            self.bcp_data["callback_time"] = self.bcp_data.get("callback_time", 0.0) + transcurrido
+            with self._lock:
+                self.bcp_data["lazy_cuts_count"] += cuts_added
+                self.bcp_data["callback_time"] = (
+                    self.bcp_data.get("callback_time", 0.0) + transcurrido
+                )
 
-    def _separar(self) -> None:
+    def _separar(self, context: Any) -> int:
         data = self.bcp_data
         internal_graph: nx.Graph = data["internal_graph"]
-        internal_nodes: List[int] = data["internal_nodes"]
         k: int = data["k"]
-        x = data["x"]
         x_indices: Dict[Tuple[int, int], int] = data["x_indices"]
+        ordered_keys: List[Tuple[int, int]] = data["x_ordered_keys"]
+        ordered_idx: List[int] = data["x_ordered_indices"]
 
-        # Lectura eficiente en bloque de los valores de x_{i,p} en la solución candidata
-        ordered_keys = data["x_ordered_keys"]
-        ordered_idx = data["x_ordered_indices"]
-        raw_values = self.get_values(ordered_idx)
+        all_values = context.get_candidate_point()
 
         partitions_nodes: Dict[int, List[int]] = {p: [] for p in range(1, k + 1)}
-        for (i, p), val in zip(ordered_keys, raw_values):
-            if val > 0.5:
+        for (i, p), col_idx in zip(ordered_keys, ordered_idx):
+            if all_values[col_idx] > 0.5:
                 partitions_nodes[p].append(i)
 
         violated_cuts = self.separator_fn(internal_graph, partitions_nodes)
         if not violated_cuts:
-            return
+            return 0
+
+        constraints: List[SparsePair] = []
+        senses: List[str] = []
+        rhs: List[float] = []
 
         for p, u_rep, v_rep, separator in violated_cuts:
             # Restricción R4: x_{u,p} + x_{v,p} - sum_{s in S} x_{s,p} <= 1
@@ -194,12 +209,20 @@ class BCPConnectivityLazyCallback(ConstraintCallbackMixin, LazyConstraintCallbac
                 cut_vars.append(x_indices[(s, p)])
                 cut_coefs.append(-1.0)
 
-            self.add(
-                constraint=[cut_vars, cut_coefs],
-                sense="L",
-                rhs=1.0,
-            )
-            data["lazy_cuts_count"] += 1
+            constraints.append(SparsePair(ind=cut_vars, val=cut_coefs))
+            senses.append("L")
+            rhs.append(1.0)
+
+        context.reject_candidate(
+            constraints=constraints,
+            senses=senses,
+            rhs=rhs,
+        )
+        return len(constraints)
+
+
+# Alias para compatibilidad hacia atrás
+BCPConnectivityLazyCallback = BCPConnectivityGenericCallback
 
 
 def build_bcp_cplex_model(
@@ -474,16 +497,8 @@ def solve_bcp_cplex(
     if presolve is not None:
         model.parameters.preprocessing.presolve = int(presolve)
 
-    # Registro de LazyConstraintCallback para R4
+    # Registro de Generic Callback (Context.id.candidate) para R4 con soporte multi-hilo
     if use_lazy_connectivity:
-        # En CPLEX, los callbacks legados de restricciones perezosas requieren
-        # desactivar reducciones duales/no lineales (preprocessing.reduce = 1: solo
-        # reducciones primales) y usar búsqueda tradicional (traditional branch-and-cut).
-        model.parameters.preprocessing.reduce = 1
-        model.parameters.mip.strategy.search = 1
-
-        cb = model.register_callback(BCPConnectivityLazyCallback)
-        # Mapear variables docplex a sus índices enteros en la instancia CPLEX
         x = meta["x"]
         ordered_keys = list(x.keys())
         x_indices = {key: var.index for key, var in x.items()}
@@ -491,12 +506,17 @@ def solve_bcp_cplex(
         meta["x_ordered_keys"] = ordered_keys
         meta["x_ordered_indices"] = [x_indices[key] for key in ordered_keys]
 
-        cb.bcp_data = meta
-        cb.separator_fn = (
+        active_separator = (
             separator_fn
             or _load_external_separator()
             or _default_connectivity_separator
         )
+        cb = BCPConnectivityGenericCallback(
+            bcp_data=meta,
+            separator_fn=active_separator,
+        )
+        cpx = model.get_cplex()
+        cpx.set_callback(cb, Context.id.candidate)
 
     # Manejo de log de salida (consola y/o archivo en outputs/logs/)
     log_stream = None
