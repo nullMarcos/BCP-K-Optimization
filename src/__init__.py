@@ -16,8 +16,12 @@ __all__ = [
     "find_connectivity_cuts",
     "bcp_connectivity_callback",
     "compute_balance_bounds",
+    "prepare_bcp_graph_data",
+    "build_solution_summary",
     "build_bcp_gurobi_model",
     "solve_bcp_gurobi",
+    "build_bcp_cplex_model",
+    "solve_bcp_cplex",
     "solve_bcp",
 ]
 
@@ -27,13 +31,25 @@ def __getattr__(name: str) -> Any:
         import src.callbacks as _callbacks
         return getattr(_callbacks, name)
     if name in (
+        "compute_balance_bounds",
+        "prepare_bcp_graph_data",
+        "build_solution_summary",
         "solve_bcp",
+    ):
+        import src.utils as _utils
+        return getattr(_utils, name)
+    if name in (
         "solve_bcp_gurobi",
         "build_bcp_gurobi_model",
-        "compute_balance_bounds",
     ):
         import src.model_gurobi as _model_gurobi
         return getattr(_model_gurobi, name)
+    if name in (
+        "solve_bcp_cplex",
+        "build_bcp_cplex_model",
+    ):
+        import src.model_cplex as _model_cplex
+        return getattr(_model_cplex, name)
     if name == "configurar_licencia":
         import src.license as _license
         return getattr(_license, name)

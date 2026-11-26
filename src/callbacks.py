@@ -1,7 +1,6 @@
 """
 Módulo de Callbacks y Separadores Nodales para BCP_k.
 
-Asignado a: Sebastián
 Responsabilidades:
     - Lógica de separación de cortes de conectividad (R4).
     - Métodos BFS/DFS para identificación de componentes conexas inducidas.
@@ -77,6 +76,7 @@ def find_minimal_separator(
 def find_connectivity_cuts(
     internal_graph: nx.Graph,
     partitions_nodes: Dict[int, List[int]],
+    deduplicate: bool = False,
 ) -> List[Tuple[int, int, int, Set[int]]]:
     """
     Busca los cortes de conectividad (R4) violados por una asignación de nodos.
@@ -85,25 +85,26 @@ def find_connectivity_cuts(
     un corte por cada componente C (incluida la más grande), separando un nodo
     u de C de un nodo v de V_p fuera de C, con la vecindad N(C) podada con
     find_minimal_separator (queda minimal por inclusión, no necesariamente de
-    cardinalidad mínima). Se cortan todas las componentes para mantener el mismo
-    comportamiento que tenía el callback original de Gurobi; cortar solo las
-    chicas dio resultados mixtos según la instancia.
+    cardinalidad mínima).
 
-    Ojo: con dos componentes puede salir el mismo corte dos veces, como (u, v, S)
-    y (v, u, S). Por eso lazy_cuts_added cuenta también esos repetidos.
+    Si `deduplicate=True`, evita recalcular e inyectar dos veces el mismo corte
+    simétrico (p, {u, v}, S) cuando dos componentes comparten la misma vecindad
+    o producen el mismo separador minimal S.
 
-    No usa nada del solver, por lo que sirve tanto para Gurobi como para CPLEX
-    (model_cplex.py la carga sola mediante _load_external_separator).
+    No usa nada del solver, por lo que sirve tanto para Gurobi como para CPLEX.
 
     Args:
         internal_graph: Grafo con los nodos indexados 1..n.
         partitions_nodes: Diccionario {p: [nodos asignados a p]}.
+        deduplicate: Si es True, filtra cortes simétricos repetidos (u, v, S) y (v, u, S).
 
     Returns:
         Lista de tuplas (p, u, v, S), cada una representa el corte
         x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}.
     """
     cortes: List[Tuple[int, int, int, Set[int]]] = []
+    seen_neighborhoods: Set[Tuple[int, int, int, frozenset[int]]] = set()
+    seen_cuts: Set[Tuple[int, int, int, frozenset[int]]] = set()
 
     for p, v_p in partitions_nodes.items():
         if len(v_p) <= 1:
@@ -123,7 +124,22 @@ def find_connectivity_cuts(
                 w for nodo in comp for w in internal_graph.neighbors(nodo)
                 if w not in comp
             }
+            pair_u, pair_v = (u_rep, v_rep) if u_rep <= v_rep else (v_rep, u_rep)
+
+            if deduplicate:
+                nbr_key = (p, pair_u, pair_v, frozenset(vecindad))
+                if nbr_key in seen_neighborhoods:
+                    continue
+                seen_neighborhoods.add(nbr_key)
+
             separador = find_minimal_separator(internal_graph, u_rep, v_rep, vecindad)
+
+            if deduplicate:
+                cut_key = (p, pair_u, pair_v, frozenset(separador))
+                if cut_key in seen_cuts:
+                    continue
+                seen_cuts.add(cut_key)
+
             cortes.append((p, u_rep, v_rep, separador))
 
     return cortes
@@ -167,7 +183,9 @@ def bcp_connectivity_callback(model: Any, where: int) -> None:
         for p in range(1, k + 1)
     }
 
-    for p, u_rep, v_rep, separador in find_connectivity_cuts(internal_graph, partitions_nodes):
+    for p, u_rep, v_rep, separador in find_connectivity_cuts(
+        internal_graph, partitions_nodes, deduplicate=True
+    ):
         # R4: x_{u,p} + x_{v,p} - 1 <= sum_{s in S} x_{s,p}
         model.cbLazy(
             x[u_rep, p] + x[v_rep, p] - 1

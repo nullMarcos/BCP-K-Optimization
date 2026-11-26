@@ -1,11 +1,14 @@
 """
-Barridos paramétricos para BCP_k (se ejecutan en el servidor; reutilizan `run_experiments`).
+Barridos paramétricos y estudio de ablación para BCP_k (reutilizan `run_experiments`).
 
 1. `epsilon`     — Sensibilidad a ε ∈ {0.00, 0.05, 0.10, 0.15}: curva de compromiso entre el
-                   balance de los bloques y el número de aristas cortadas Z = Σ y_ij.
-2. `scalability` — Escalabilidad en n y k ∈ {2, 3, 4, 5}: identifica el punto de quiebre (menor n
-                   en que el solver alcanza el límite de tiempo sin cerrar la prueba) y muestra,
-                   a partir de los logs, cómo el MIPGap se estanca en el tiempo.
+                   balance de los bloques y el número de aristas cortadas Z = Σ y_ij, incluyendo
+                   el desbalance efectivo observado frente al permitido.
+2. `scalability` — Escalabilidad en n y k ∈ {2, 3, 4, 5}: identifica el punto de quiebre global
+                   y desglosado por familia topológica, resume la actividad de Branch-and-Cut
+                   y muestra, a partir de los logs, cómo el MIPGap se estanca en el tiempo.
+3. `ablation_r6` — Estudio de ablación de las restricciones de ruptura de simetrías (R6):
+                   compara ejecución Con R6 vs Sin R6 en tiempo, nodos B&B, cortes R4 y gap.
 
 Con `--from-csv` no se resuelve nada: solo se analiza un CSV ya generado (por ejemplo, el
 traído desde el servidor con rsync junto con su carpeta outputs/logs/).
@@ -13,6 +16,7 @@ traído desde el servidor con rsync junto con su carpeta outputs/logs/).
 Ejemplos:
     python experiments/parameter_sweep.py epsilon --solvers gurobi cplex --time-limit 300
     python experiments/parameter_sweep.py scalability --solvers gurobi cplex --time-limit 600
+    python experiments/parameter_sweep.py ablation_r6 --solvers gurobi --time-limit 120
     python experiments/parameter_sweep.py scalability --from-csv outputs/results/sweep_scalability_<FECHA>.csv
 """
 
@@ -20,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+import math
 from pathlib import Path
 import re
 import sys
@@ -29,27 +34,39 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
+import numpy as np
+import pandas as pd
 
-from experiments.generate_profiles import (  # noqa: E402
+from experiments.generate_profiles import (
     CATEGORICAL,
     FIG_DIR,
+    MIN_RUNTIME,
     RESULTS_DIR,
     SOLVED_STATUSES,
     SOLVER_STYLE,
     TEXT_SECONDARY,
     apply_style,
+    branch_and_cut_summary,
     drop_errors,
     ordered_solvers,
+    plot_branch_and_cut_activity,
     plt,
 )
 
 LOGS_DIR = PROJECT_ROOT / "outputs" / "logs"
 
+DEFAULT_ABLATION_INSTANCES = [
+    "fem_can_24",
+    "karate_club",
+    "power_bcspwr01",
+    "power_bcspwr02",
+    "les_miserables",
+    "grid_10x10",
+]
+
 
 def _k_color(k: int, ks: Sequence[int]) -> str:
-    return CATEGORICAL[list(ks).index(k)]
+    return CATEGORICAL[list(ks).index(k) % len(CATEGORICAL)]
 
 
 def _read_csv(csv_path: Path) -> pd.DataFrame:
@@ -61,8 +78,15 @@ def _read_csv(csv_path: Path) -> pd.DataFrame:
     return df
 
 
-def _run(experiment: str, instance_names: Optional[List[str]], solvers: Sequence[str],
-         k_values: Sequence[int], epsilons: Sequence[float], time_limit: float) -> Path:
+def _run(
+    experiment: str,
+    instance_names: Optional[List[str]],
+    solvers: Sequence[str],
+    k_values: Sequence[int],
+    epsilons: Sequence[float],
+    time_limit: float,
+    threads: Optional[int] = None,
+) -> Path:
     from experiments.run_experiments import run_experiments
     from src.instance_loader import load_instances
 
@@ -74,9 +98,52 @@ def _run(experiment: str, instance_names: Optional[List[str]], solvers: Sequence
         k_values=k_values,
         epsilons=epsilons,
         time_limit=time_limit,
+        threads=threads,
         output_csv=csv_path,
         logs_dir=LOGS_DIR / f"sweep_{experiment}_{stamp}",
     )
+    return csv_path
+
+
+def _run_ablation_r6(
+    instance_names: Optional[List[str]],
+    solvers: Sequence[str],
+    k_values: Sequence[int],
+    epsilons: Sequence[float],
+    time_limit: float,
+    threads: Optional[int] = None,
+) -> Path:
+    """Ejecuta cada configuración con `use_symmetry_breaking=True` y `False` y consolida en un solo CSV."""
+    from experiments.run_experiments import run_experiments
+    from src.instance_loader import load_instances
+
+    target_names = instance_names or DEFAULT_ABLATION_INSTANCES
+    instances = load_instances(names=target_names)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    csv_path = RESULTS_DIR / f"sweep_ablation_r6_{stamp}.csv"
+    log_root = LOGS_DIR / f"sweep_ablation_r6_{stamp}"
+
+    dfs: List[pd.DataFrame] = []
+    for use_r6 in (True, False):
+        tmp_csv = RESULTS_DIR / f"_tmp_ablation_r6_{'on' if use_r6 else 'off'}_{stamp}.csv"
+        df_part = run_experiments(
+            instances=instances,
+            solvers=solvers,
+            k_values=k_values,
+            epsilons=epsilons,
+            time_limit=time_limit,
+            threads=threads,
+            use_symmetry_breaking=use_r6,
+            output_csv=tmp_csv,
+            logs_dir=log_root,
+        )
+        dfs.append(df_part)
+        if tmp_csv.exists():
+            tmp_csv.unlink()
+
+    combined = pd.concat(dfs, ignore_index=True)
+    combined.to_csv(csv_path, index=False, encoding="utf-8")
+    print(f"\nResultados consolidados de ablación R6 guardados en: {csv_path}")
     return csv_path
 
 
@@ -87,6 +154,7 @@ def epsilon_tradeoff_table(df: pd.DataFrame) -> pd.DataFrame:
     """
     Para cada (solver, instancia, k): Z_rel(ε) = Z(ε) / Z(ε_ref), con ε_ref el menor ε con solución.
     ahorro_cortes_pct = 100·(1 − Z_rel): cuántos cortes se ahorran al relajar el balance.
+    Incluye cotas teóricas [l_min, u_max], tamaños reales y desbalance efectivo si están presentes.
     """
     keys = ["solver", "instance", "k"]
     refs = (df[df["objective"].notna()].sort_values("epsilon")
@@ -95,8 +163,18 @@ def epsilon_tradeoff_table(df: pd.DataFrame) -> pd.DataFrame:
     data = df.merge(refs, on=keys, how="left")
     data["z_rel"] = np.where(data["z_ref"] > 0, data["objective"] / data["z_ref"], np.nan)
     data["ahorro_cortes_pct"] = 100.0 * (1.0 - data["z_rel"])
-    cols = keys + ["family", "num_nodes", "epsilon", "status", "closed", "objective", "best_bound",
-                   "mip_gap", "runtime", "eps_ref", "z_ref", "z_rel", "ahorro_cortes_pct"]
+
+    base_cols = keys + [
+        "family", "num_nodes", "epsilon", "status", "closed", "objective", "best_bound",
+        "mip_gap", "runtime",
+    ]
+    extra_cols = [
+        c for c in ("l_min", "u_max", "min_block_size", "max_block_size", "observed_imbalance",
+                    "lazy_cuts_added", "callback_time", "callback_time_pct")
+        if c in data.columns
+    ]
+    tail_cols = ["eps_ref", "z_ref", "z_rel", "ahorro_cortes_pct"]
+    cols = base_cols + extra_cols + tail_cols
     return data[cols].sort_values(keys + ["epsilon"]).reset_index(drop=True)
 
 
@@ -140,30 +218,44 @@ def plot_epsilon_tradeoff(table: pd.DataFrame, out_path: Path) -> Path:
 
 
 def analyze_epsilon(csv_path: Path) -> Dict[str, Path]:
-    table = epsilon_tradeoff_table(_read_csv(csv_path))
+    df = _read_csv(csv_path)
+    table = epsilon_tradeoff_table(df)
     table_path = RESULTS_DIR / "epsilon_tradeoff.csv"
     table.to_csv(table_path, index=False, encoding="utf-8")
-    return {"tabla": table_path, "figura": plot_epsilon_tradeoff(table, FIG_DIR / "epsilon_tradeoff.png")}
+    return {"tabla": table_path, "figura": plot_epsilon_tradeoff(table, FIG_DIR / "compromiso_epsilon.png")}
 
 
 # ---------------------------------------------------------------------------
-# 2. Escalabilidad y punto de quiebre
+# 2. Escalabilidad y punto de quiebre (global y desglosado por familia)
 # ---------------------------------------------------------------------------
-def breakpoint_table(df: pd.DataFrame) -> pd.DataFrame:
-    """Por (solver, k, ε): mayor n cerrado y punto de quiebre (menor n que no cerró la prueba)."""
+def breakpoint_table(df: pd.DataFrame, by_family: bool = False) -> pd.DataFrame:
+    """
+    Por (solver, [family], k, ε): mayor n cerrado y punto de quiebre
+    (menor n que no cerró la prueba dentro del límite de tiempo).
+    """
+    group_cols = ["solver", "family", "k", "epsilon"] if by_family else ["solver", "k", "epsilon"]
     rows = []
-    for (solver, k, eps), g in df.groupby(["solver", "k", "epsilon"]):
+    for keys, g in df.groupby(group_cols):
         g = g.sort_values("num_nodes")
         closed, open_ = g[g["closed"]], g[~g["closed"]]
         first = open_.iloc[0] if len(open_) else None
-        rows.append({
-            "solver": solver, "k": k, "epsilon": eps, "instancias": len(g), "cerradas": len(closed),
+        if by_family:
+            solver, family, k, eps = keys
+            row: Dict[str, object] = {"solver": solver, "family": family, "k": k, "epsilon": eps}
+        else:
+            solver, k, eps = keys
+            row = {"solver": solver, "k": k, "epsilon": eps}
+
+        row.update({
+            "instancias": len(g),
+            "cerradas": len(closed),
             "n_max_cerrado": int(closed["num_nodes"].max()) if len(closed) else None,
             "n_quiebre": int(first["num_nodes"]) if first is not None else None,
             "instancia_quiebre": first["instance"] if first is not None else None,
             "gap_en_quiebre_pct": round(100.0 * float(first["mip_gap"]), 2)
             if first is not None and pd.notna(first["mip_gap"]) else None,
         })
+        rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -286,45 +378,190 @@ def plot_gap_vs_time(df: pd.DataFrame, out_path: Path, time_limit: Optional[floa
 
 def analyze_scalability(csv_path: Path, time_limit: Optional[float]) -> Dict[str, Path]:
     df = _read_csv(csv_path)
-    bp = breakpoint_table(df)
+    bp = breakpoint_table(df, by_family=False)
     bp_path = RESULTS_DIR / "scalability_breakpoints.csv"
     bp.to_csv(bp_path, index=False, encoding="utf-8")
     print(bp.to_string(index=False))
-    outputs = {"quiebres": bp_path, "figura": plot_scalability(df, FIG_DIR / "scalability.png", time_limit)}
-    gap_fig = plot_gap_vs_time(df, FIG_DIR / "gap_vs_time.png", time_limit)
+
+    bp_fam = breakpoint_table(df, by_family=True)
+    bp_fam_path = RESULTS_DIR / "scalability_breakpoints_by_family.csv"
+    bp_fam.to_csv(bp_fam_path, index=False, encoding="utf-8")
+
+    bc_summary = branch_and_cut_summary(df)
+    bc_summary_path = RESULTS_DIR / "branch_and_cut_summary.csv"
+    bc_summary.to_csv(bc_summary_path, index=False, encoding="utf-8")
+
+    outputs: Dict[str, Path] = {
+        "quiebres": bp_path,
+        "quiebres_fam": bp_fam_path,
+        "bc_resumen": bc_summary_path,
+        "figura": plot_scalability(df, FIG_DIR / "escalabilidad.png", time_limit),
+        "bc_figura": plot_branch_and_cut_activity(df, FIG_DIR / "actividad_branch_and_cut.png"),
+    }
+    gap_fig = plot_gap_vs_time(df, FIG_DIR / "gap_vs_tiempo.png", time_limit)
     if gap_fig:
         outputs["gap_vs_tiempo"] = gap_fig
     return outputs
 
 
 # ---------------------------------------------------------------------------
+# 3. Estudio de ablación de Ruptura de Simetrías (R6)
+# ---------------------------------------------------------------------------
+def ablation_r6_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compara lado a lado Con R6 (`use_symmetry_breaking=True`) vs Sin R6 (`False`)
+    por (solver, instance, family, num_nodes, k, epsilon).
+    Calcula factor de aceleración `speedup_r6 = t_sin_R6 / t_con_R6` y reducción de nodos B&B.
+    """
+    if "use_symmetry_breaking" not in df.columns:
+        raise ValueError("El CSV no contiene la columna 'use_symmetry_breaking' requerida para analizar ablación R6.")
+
+    data = df.copy()
+    data["use_symmetry_breaking"] = data["use_symmetry_breaking"].astype(bool)
+    keys = ["solver", "instance", "family", "num_nodes", "k", "epsilon"]
+    val_cols = ["status", "closed", "objective", "mip_gap", "runtime", "node_count", "lazy_cuts_added"]
+    if "callback_time" in data.columns:
+        val_cols.append("callback_time")
+
+    on_df = data[data["use_symmetry_breaking"]][keys + val_cols].rename(
+        columns={c: f"{c}_r6_on" for c in val_cols}
+    )
+    off_df = data[~data["use_symmetry_breaking"]][keys + val_cols].rename(
+        columns={c: f"{c}_r6_off" for c in val_cols}
+    )
+
+    merged = pd.merge(on_df, off_df, on=keys, how="outer")
+    t_on = merged["runtime_r6_on"].clip(lower=MIN_RUNTIME)
+    t_off = merged["runtime_r6_off"].clip(lower=MIN_RUNTIME)
+    merged["speedup_r6"] = np.where(t_on.notna() & t_off.notna(), (t_off / t_on).round(3), np.nan)
+
+    n_on = merged["node_count_r6_on"].astype(float)
+    n_off = merged["node_count_r6_off"].astype(float)
+    merged["node_reduction_pct"] = np.where(
+        n_off.notna() & (n_off > 0) & n_on.notna(),
+        (100.0 * (1.0 - n_on / n_off)).round(2),
+        np.nan,
+    )
+    return merged.sort_values(["solver", "k", "num_nodes", "instance"]).reset_index(drop=True)
+
+
+def plot_ablation_r6(df: pd.DataFrame, out_path: Path, time_limit: Optional[float]) -> Path:
+    """
+    Compara Con R6 vs Sin R6 por valor de k:
+      (a) Tiempo de resolución [s] (escala log)
+      (b) Nodos explorados en el árbol B&B (escala log)
+    """
+    data = df.copy()
+    data["use_symmetry_breaking"] = data["use_symmetry_breaking"].astype(bool)
+    ks = sorted(data["k"].unique())
+    variants = [(True, "Con R6 (Simetría rota)", CATEGORICAL[0]), (False, "Sin R6 (Con simetría)", CATEGORICAL[1])]
+
+    fig, (ax_t, ax_n) = plt.subplots(1, 2, figsize=(11.2, 4.3))
+    width = 0.35
+
+    for idx, (flag, label, color) in enumerate(variants):
+        pos = np.arange(len(ks)) + (idx - 0.5) * width
+        sub = data[data["use_symmetry_breaking"] == flag]
+
+        t_series = []
+        n_series = []
+        for k in ks:
+            t_arr = sub[sub["k"] == k]["runtime"].dropna().clip(lower=MIN_RUNTIME).to_numpy()
+            n_arr = sub[sub["k"] == k]["node_count"].dropna().clip(lower=1).to_numpy()
+            t_series.append(t_arr if t_arr.size else np.array([np.nan]))
+            n_series.append(n_arr if n_arr.size else np.array([np.nan]))
+
+        for ax, series in ((ax_t, t_series), (ax_n, n_series)):
+            bp = ax.boxplot(
+                series,
+                positions=pos,
+                widths=width * 0.85,
+                patch_artist=True,
+                medianprops={"color": "#0b0b0b", "linewidth": 1.5},
+                flierprops={"marker": "o", "markersize": 3, "markerfacecolor": color, "markeredgecolor": color},
+            )
+            for patch in bp["boxes"]:
+                patch.set(facecolor=color, edgecolor=color, alpha=0.78)
+            ax.plot([], [], color=color, linewidth=6, alpha=0.78, label=label)
+
+    if time_limit:
+        ax_t.axhline(time_limit, color=TEXT_SECONDARY, linestyle=":", linewidth=1.2)
+        ax_t.annotate("límite de tiempo", xy=(1.0, time_limit), xycoords=("axes fraction", "data"),
+                      xytext=(-4, 4), textcoords="offset points", ha="right", fontsize=8, color=TEXT_SECONDARY)
+
+    for ax in (ax_t, ax_n):
+        ax.set_xticks(np.arange(len(ks)))
+        ax.set_xticklabels([f"k={k}\n({math.factorial(int(k))} perm.)" if k <= 6 else f"k={k}" for k in ks])
+        ax.set_yscale("log")
+
+    ax_t.set_ylabel("tiempo de resolución [s]")
+    ax_t.set_title("(a) Impacto de R6 en tiempo de cómputo")
+    ax_t.legend(loc="upper left")
+
+    ax_n.set_ylabel("nodos B&B explorados (escala log, mín=1)")
+    ax_n.set_title("(b) Impacto de R6 en nodos explorados")
+
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
+def analyze_ablation_r6(csv_path: Path, time_limit: Optional[float]) -> Dict[str, Path]:
+    df = _read_csv(csv_path)
+    table = ablation_r6_table(df)
+    table_path = RESULTS_DIR / "ablation_r6_comparison.csv"
+    table.to_csv(table_path, index=False, encoding="utf-8")
+    print(table.to_string(index=False))
+    fig_path = plot_ablation_r6(df, FIG_DIR / "ablacion_r6.png", time_limit)
+    return {"ablacion_tabla": table_path, "ablacion_figura": fig_path}
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Barridos paramétricos de BCP_k (ε y escalabilidad).")
+    parser = argparse.ArgumentParser(description="Barridos paramétricos y ablación R6 de BCP_k.")
     sub = parser.add_subparsers(dest="experiment", required=True)
-    for name, k_default, eps_default, tl_default in [
-        ("epsilon", [2, 3], [0.00, 0.05, 0.10, 0.15], 300.0),
-        ("scalability", [2, 3, 4, 5], [0.05], 600.0),
+    for name, k_default, eps_default, tl_default, inst_default in [
+        ("epsilon", [2, 3], [0.00, 0.05, 0.10, 0.15], 300.0, None),
+        ("scalability", [2, 3, 4, 5], [0.05], 600.0, None),
+        ("ablation_r6", [2, 3, 4], [0.05], 120.0, DEFAULT_ABLATION_INSTANCES),
     ]:
         p = sub.add_parser(name)
         p.add_argument("--solvers", nargs="+", default=["gurobi", "cplex"])
-        p.add_argument("--instances", nargs="+", default=None, help="Nombres de instancias (por defecto todas)")
+        p.add_argument("--instances", nargs="+", default=inst_default, help="Nombres de instancias")
         p.add_argument("--k-values", nargs="+", type=int, default=k_default)
         p.add_argument("--epsilons", nargs="+", type=float, default=eps_default)
         p.add_argument("--time-limit", type=float, default=tl_default)
+        p.add_argument("--threads", type=int, default=None, help="Hilos máximos por solver")
         p.add_argument("--from-csv", type=Path, default=None, help="Solo analiza un CSV existente, sin resolver")
     args = parser.parse_args()
 
     apply_style()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    csv_path = args.from_csv or _run(args.experiment, args.instances, args.solvers,
-                                     args.k_values, args.epsilons, args.time_limit)
-    outputs = (analyze_epsilon(csv_path) if args.experiment == "epsilon"
-               else analyze_scalability(csv_path, args.time_limit))
+
+    if args.from_csv:
+        csv_path = args.from_csv
+    elif args.experiment == "ablation_r6":
+        csv_path = _run_ablation_r6(
+            args.instances, args.solvers, args.k_values, args.epsilons, args.time_limit, args.threads
+        )
+    else:
+        csv_path = _run(
+            args.experiment, args.instances, args.solvers, args.k_values, args.epsilons, args.time_limit, args.threads
+        )
+
+    if args.experiment == "epsilon":
+        outputs = analyze_epsilon(csv_path)
+    elif args.experiment == "scalability":
+        outputs = analyze_scalability(csv_path, args.time_limit)
+    else:
+        outputs = analyze_ablation_r6(csv_path, args.time_limit)
+
     for key, path in outputs.items():
-        print(f"  {key:14s} -> {path}")
+        print(f"  {key:15s} -> {path}")
 
 
 if __name__ == "__main__":

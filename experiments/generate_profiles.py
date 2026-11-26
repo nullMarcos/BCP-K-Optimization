@@ -1,5 +1,6 @@
 """
-Perfiles de desempeño de Dolan & Moré (2002) y gráficos comparativos Gurobi vs CPLEX.
+Perfiles de desempeño de Dolan & Moré (2002), análisis de actividad Branch-and-Cut
+y gráficos comparativos Gurobi vs CPLEX.
 
 Sea P el conjunto de problemas (instancia, k, epsilon) y S el conjunto de solvers.
 t_{p,s} es el tiempo que el solver s necesita para resolver p. La razón de desempeño es
@@ -27,9 +28,9 @@ from typing import Dict, Iterable, List, Optional, Sequence
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
-import pandas as pd  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FIG_DIR = PROJECT_ROOT / "outputs" / "figures"
@@ -81,7 +82,10 @@ def load_results(csv_paths: Iterable[Path]) -> pd.DataFrame:
     df["solver"] = df["solver"].astype(str).str.upper()
     df["epsilon"] = df["epsilon"].astype(float).round(4)
     df = drop_errors(df)
-    return df.drop_duplicates(subset=PROBLEM_COLS + ["solver"], keep="last").reset_index(drop=True)
+    dedup_cols = list(PROBLEM_COLS) + ["solver"]
+    if "use_symmetry_breaking" in df.columns:
+        dedup_cols.append("use_symmetry_breaking")
+    return df.drop_duplicates(subset=dedup_cols, keep="last").reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +94,8 @@ def load_results(csv_paths: Iterable[Path]) -> pd.DataFrame:
 def cost_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """t_{p,s}: filas = problemas, columnas = solvers; ∞ si no resolvió. Solo problemas corridos por todos."""
     data = df.copy()
+    if "use_symmetry_breaking" in data.columns:
+        data = data[data["use_symmetry_breaking"].fillna(True).astype(bool)]
     solved = data["status"].isin(SOLVED_STATUSES) & data["runtime"].notna()
     data["cost"] = np.where(solved, data["runtime"].clip(lower=MIN_RUNTIME), np.inf)
     t = data.pivot_table(index=PROBLEM_COLS, columns="solver", values="cost", aggfunc="first")
@@ -143,7 +149,9 @@ def _grouped_boxplot(ax, groups: Sequence, solvers: Sequence[str], values_of) ->
     for j, solver in enumerate(solvers):
         color = SOLVER_STYLE.get(solver, {"color": CATEGORICAL[2]})["color"]
         pos = np.arange(len(groups)) + (j - (len(solvers) - 1) / 2) * width
-        bp = ax.boxplot([values_of(solver, g) for g in groups], positions=pos, widths=width * 0.85,
+        series_list = [np.asarray(values_of(solver, g), dtype=float) for g in groups]
+        non_empty = [s[~np.isnan(s)] if len(s) else np.array([np.nan]) for s in series_list]
+        bp = ax.boxplot(non_empty, positions=pos, widths=width * 0.85,
                         patch_artist=True, medianprops={"color": "#0b0b0b", "linewidth": 1.5},
                         flierprops={"marker": "o", "markersize": 3, "markerfacecolor": color,
                                     "markeredgecolor": color})
@@ -204,6 +212,111 @@ def plot_gap_diagram(df: pd.DataFrame, out_path: Path) -> Path:
     return out_path
 
 
+# ---------------------------------------------------------------------------
+# Actividad de Branch-and-Cut (cortes perezosos R4, nodos B&B y tiempo en callback)
+# ---------------------------------------------------------------------------
+def branch_and_cut_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Resume por (solver, family, k) el esfuerzo del esquema Branch-and-Cut:
+    cortes de conectividad R4 inyectados, nodos explorados y tiempo en callback.
+    """
+    data = df.copy()
+    if "callback_time" not in data.columns:
+        data["callback_time"] = np.nan
+    if "callback_time_pct" not in data.columns:
+        valid_rt = data["runtime"].notna() & (data["runtime"] > 0) & data["callback_time"].notna()
+        data["callback_time_pct"] = np.where(
+            valid_rt,
+            np.minimum(100.0, 100.0 * data["callback_time"] / data["runtime"]),
+            np.nan,
+        )
+
+    rows = []
+    for (solver, family, k), g in data.groupby(["solver", "family", "k"], dropna=False):
+        rows.append({
+            "solver": solver,
+            "family": family,
+            "k": int(k),
+            "corridas": len(g),
+            "cerradas": int(g["status"].isin(SOLVED_STATUSES).sum()),
+            "median_lazy_cuts": round(float(g["lazy_cuts_added"].median()), 2)
+            if "lazy_cuts_added" in g and g["lazy_cuts_added"].notna().any() else None,
+            "mean_lazy_cuts": round(float(g["lazy_cuts_added"].mean()), 2)
+            if "lazy_cuts_added" in g and g["lazy_cuts_added"].notna().any() else None,
+            "max_lazy_cuts": int(g["lazy_cuts_added"].max())
+            if "lazy_cuts_added" in g and g["lazy_cuts_added"].notna().any() else None,
+            "median_node_count": round(float(g["node_count"].median()), 2)
+            if "node_count" in g and g["node_count"].notna().any() else None,
+            "mean_node_count": round(float(g["node_count"].mean()), 2)
+            if "node_count" in g and g["node_count"].notna().any() else None,
+            "median_runtime_s": round(float(g["runtime"].median()), 4)
+            if "runtime" in g and g["runtime"].notna().any() else None,
+            "median_callback_time_s": round(float(g["callback_time"].median()), 4)
+            if g["callback_time"].notna().any() else None,
+            "median_callback_time_pct": round(float(g["callback_time_pct"].median()), 2)
+            if g["callback_time_pct"].notna().any() else None,
+        })
+    return pd.DataFrame(rows).sort_values(["solver", "family", "k"]).reset_index(drop=True)
+
+
+def plot_branch_and_cut_activity(df: pd.DataFrame, out_path: Path) -> Path:
+    """
+    Grafica por familia topológica y solver:
+      (a) Cortes perezosos R4 inyectados (lazy_cuts_added)
+      (b) Nodos explorados en el árbol Branch-and-Bound (node_count)
+      (c) Porcentaje de tiempo consumido dentro del callback R4 (si está disponible)
+    """
+    families = sorted(df["family"].dropna().unique())
+    solvers = ordered_solvers(df["solver"])
+    has_cb_pct = "callback_time_pct" in df.columns and df["callback_time_pct"].notna().any()
+    n_panels = 3 if has_cb_pct else 2
+
+    fig, axes = plt.subplots(1, n_panels, figsize=(4.6 * n_panels, 4.2))
+    if n_panels == 2:
+        ax_cuts, ax_nodes = axes
+        ax_cb = None
+    else:
+        ax_cuts, ax_nodes, ax_cb = axes
+
+    _grouped_boxplot(
+        ax_cuts,
+        families,
+        solvers,
+        lambda s, f: df[(df["family"] == f) & (df["solver"] == s)]["lazy_cuts_added"].dropna(),
+    )
+    ax_cuts.set_xticklabels(families, rotation=20, ha="right")
+    ax_cuts.set_ylabel("cortes perezosos R4 inyectados")
+    ax_cuts.set_title("(a) Cortes de conectividad (R4)")
+    ax_cuts.legend(loc="upper left")
+
+    _grouped_boxplot(
+        ax_nodes,
+        families,
+        solvers,
+        lambda s, f: df[(df["family"] == f) & (df["solver"] == s)]["node_count"].dropna().clip(lower=1),
+    )
+    ax_nodes.set_yscale("log")
+    ax_nodes.set_xticklabels(families, rotation=20, ha="right")
+    ax_nodes.set_ylabel("nodos B&B explorados (escala log, mín=1)")
+    ax_nodes.set_title("(b) Tamaño del árbol Branch-and-Bound")
+
+    if ax_cb is not None:
+        _grouped_boxplot(
+            ax_cb,
+            families,
+            solvers,
+            lambda s, f: df[(df["family"] == f) & (df["solver"] == s)]["callback_time_pct"].dropna(),
+        )
+        ax_cb.set_xticklabels(families, rotation=20, ha="right")
+        ax_cb.set_ylabel("tiempo en callback / tiempo total [%]")
+        ax_cb.set_title("(c) Costo relativo del separador R4")
+
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+    return out_path
+
+
 def generate_all(csv_paths: Sequence[Path], time_limit: Optional[float] = None) -> Dict[str, Path]:
     apply_style()
     FIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -216,14 +329,20 @@ def generate_all(csv_paths: Sequence[Path], time_limit: Optional[float] = None) 
         if len(r):
             r.to_csv(RESULTS_DIR / "performance_ratios.csv")
             rho = performance_profile(r, tau_grid(r))
-            outputs["dolan_more"] = plot_performance_profile(rho, len(r), FIG_DIR / "dolan_more_runtime.png")
+            outputs["dolan_more"] = plot_performance_profile(rho, len(r), FIG_DIR / "perfil_dolan_more_tiempo.png")
         else:
             print("[aviso] No hay problemas corridos por todos los solvers: se omite el perfil.")
     else:
         print("[aviso] Solo hay un solver en los datos: se omite el perfil de Dolan–Moré.")
 
-    outputs["boxplot_runtime"] = plot_runtime_boxplots(df, FIG_DIR / "boxplot_runtime.png", time_limit)
-    outputs["gap_diagram"] = plot_gap_diagram(df, FIG_DIR / "gap_diagram.png")
+    outputs["boxplot_runtime"] = plot_runtime_boxplots(df, FIG_DIR / "boxplot_tiempo.png", time_limit)
+    outputs["gap_diagram"] = plot_gap_diagram(df, FIG_DIR / "diagrama_gap.png")
+
+    bc_table = branch_and_cut_summary(df)
+    bc_table_path = RESULTS_DIR / "branch_and_cut_summary.csv"
+    bc_table.to_csv(bc_table_path, index=False, encoding="utf-8")
+    outputs["bc_summary_csv"] = bc_table_path
+    outputs["bc_activity_fig"] = plot_branch_and_cut_activity(df, FIG_DIR / "actividad_branch_and_cut.png")
     return outputs
 
 
