@@ -68,15 +68,6 @@ Desktop.ini
 *.lp
 *.sav
 
-# Resultados y salidas experimentales locales
-outputs/20*/
-outputs/logs/*
-outputs/results/*
-outputs/figures/*
-!outputs/logs/.gitkeep
-!outputs/results/.gitkeep
-!outputs/figures/.gitkeep
-
 # --- Datos y Caché Local ---
 .ipynb_checkpoints/
 .pytest_cache/

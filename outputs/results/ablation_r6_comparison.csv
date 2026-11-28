@@ -1,0 +1,16 @@
+solver,instance,family,num_nodes,k,epsilon,status_r6_on,closed_r6_on,objective_r6_on,mip_gap_r6_on,runtime_r6_on,node_count_r6_on,lazy_cuts_added_r6_on,callback_time_r6_on,status_r6_off,closed_r6_off,objective_r6_off,mip_gap_r6_off,runtime_r6_off,node_count_r6_off,lazy_cuts_added_r6_off,callback_time_r6_off,speedup_r6,node_reduction_pct
+GUROBI,fem_can_24,mesh_planar,24,2,0.05,OPTIMAL,True,10,0.0,0.0585,9,2,0.0035,OPTIMAL,True,10,0.0,0.0811,15,14,0.0054,1.386,40.0
+GUROBI,karate_club,social_scale_free,34,2,0.05,OPTIMAL,True,10,0.0,0.0273,1,21,0.0085,OPTIMAL,True,10,0.0,0.0728,10,20,0.0058,2.667,90.0
+GUROBI,fem_can_61,mesh_planar,61,2,0.05,OPTIMAL,True,20,0.0,0.1068,13,18,0.0154,OPTIMAL,True,20,0.0,0.1716,58,108,0.0762,1.607,77.59
+GUROBI,les_miserables,social_scale_free,77,2,0.05,OPTIMAL,True,25,0.0,0.1997,31,175,0.0808,OPTIMAL,True,25,0.0,0.2175,48,257,0.1126,1.089,35.42
+GUROBI,power_bcspwr03,mesh_planar,118,2,0.05,OPTIMAL,True,7,0.0,0.313,70,344,0.1438,OPTIMAL,True,7,0.0,0.2866,103,354,0.1516,0.916,32.04
+GUROBI,fem_can_24,mesh_planar,24,3,0.05,OPTIMAL,True,20,0.0,0.3528,461,63,0.0249,OPTIMAL,True,20,0.0,0.4469,2159,16,0.0058,1.267,78.65
+GUROBI,karate_club,social_scale_free,34,3,0.05,OPTIMAL,True,23,0.0,0.3271,59,60,0.022,OPTIMAL,True,23,0.0,0.2504,281,202,0.0545,0.766,79.0
+GUROBI,fem_can_61,mesh_planar,61,3,0.05,OPTIMAL,True,42,0.0,1.7838,1158,240,0.1858,OPTIMAL,True,42,0.0,1.7019,2689,181,0.1193,0.954,56.94
+GUROBI,les_miserables,social_scale_free,77,3,0.05,OPTIMAL,True,42,0.0,0.892,512,349,0.1767,OPTIMAL,True,42,0.0,1.1115,545,541,0.2562,1.246,6.06
+GUROBI,power_bcspwr03,mesh_planar,118,3,0.05,OPTIMAL,True,9,0.0,1.0054,303,655,0.2747,OPTIMAL,True,9,0.0,1.3347,957,632,0.282,1.328,68.34
+GUROBI,fem_can_24,mesh_planar,24,4,0.05,OPTIMAL,True,24,0.0,0.6391,1150,36,0.0131,OPTIMAL,True,24,0.0,4.1087,24322,100,0.0261,6.429,95.27
+GUROBI,karate_club,social_scale_free,34,4,0.05,OPTIMAL,True,28,0.0,0.3798,109,165,0.0601,OPTIMAL,True,28,0.0,2.9269,5351,353,0.0929,7.706,97.96
+GUROBI,fem_can_61,mesh_planar,61,4,0.05,OPTIMAL,True,59,0.0,31.521,14653,441,0.2992,OPTIMAL,True,59,0.0,33.9451,31842,393,0.2523,1.077,53.98
+GUROBI,les_miserables,social_scale_free,77,4,0.05,OPTIMAL,True,58,0.0,11.9069,6479,1360,0.7251,OPTIMAL,True,58,0.0,21.7613,18073,996,0.5988,1.828,64.15
+GUROBI,power_bcspwr03,mesh_planar,118,4,0.05,OPTIMAL,True,15,0.0,10.2243,4327,1710,0.8141,OPTIMAL,True,15,0.0,30.221,19646,2006,0.971,2.956,77.98

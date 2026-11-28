@@ -1,0 +1,7 @@
+solver,k,epsilon,instancias,cerradas,n_max_cerrado,n_quiebre,instancia_quiebre,gap_en_quiebre_pct
+CPLEX,2,0.05,10,10,200,,,
+CPLEX,3,0.05,10,9,200,100.0,er_n100_p006,46.82
+CPLEX,4,0.05,10,8,150,100.0,er_n100_p006,62.14
+GUROBI,2,0.05,10,10,200,,,
+GUROBI,3,0.05,10,9,200,100.0,er_n100_p006,45.24
+GUROBI,4,0.05,10,9,200,100.0,er_n100_p006,71.0
